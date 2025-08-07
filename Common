@@ -1,0 +1,273 @@
+using System;
+using System.IO;
+using System.Net.Http;
+using System.Threading.Tasks;
+using WebSocketSharp;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
+namespace QlikSenseChartDataExtractor
+{
+    class Program
+    {
+        // Configuration
+        private static readonly string WS_URL = "ws://localhost:4848/app/"; // For Qlik Sense Desktop
+        private static readonly string APP_NAME = "YourApp.qvf"; // Replace with your app name (e.g., "Executive Dashboard.qvf")
+        private static readonly string CHART_ID = "kfxNpV"; // Replace with your chart ID
+        private static readonly string OUTPUT_CSV = "chart_data.csv"; // Output CSV file
+
+        // Global variables
+        private static int appHandle = -1;
+        private static int sessionHandle = -1;
+        private static int chartHandle = -1;
+        private static int hypercubeHandle = -1;
+        private static int messageId = 1;
+        private static readonly JObject responses = new JObject();
+        private static WebSocket ws;
+
+        static async Task Main(string[] args)
+        {
+            try
+            {
+                // Initialize WebSocket
+                ws = new WebSocket(WS_URL);
+                ws.OnMessage += OnMessage;
+                ws.OnError += (sender, e) => Console.WriteLine($"WebSocket error: {e.Message}");
+                ws.OnOpen += (sender, e) => Console.WriteLine("Connected to Qlik Engine");
+                ws.OnClose += (sender, e) => Console.WriteLine("WebSocket connection closed");
+
+                // Connect to WebSocket
+                ws.Connect();
+
+                // Wait for processing to complete (simplified; adjust for production)
+                await Task.Delay(TimeSpan.FromSeconds(10));
+
+                // Close WebSocket
+                ws.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error: {ex.Message}");
+            }
+        }
+
+        private static void OnMessage(object sender, MessageEventArgs e)
+        {
+            var response = JObject.Parse(e.Data);
+            Console.WriteLine($"Received response ID {response["id"]}: {response.ToString(Formatting.Indented)}");
+            responses[response["id"].ToString()] = response;
+
+            switch ((int)response["id"])
+            {
+                case 1: // GetDocList
+                    HandleGetDocList(response);
+                    break;
+                case 2: // OpenDoc
+                    HandleOpenDoc(response);
+                    break;
+                case 3: // CreateSessionObject (SheetList)
+                    HandleCreateSessionObjectSheetList(response);
+                    break;
+                case 4: // GetLayout (SheetList)
+                    HandleGetSheetLayout(response);
+                    break;
+                case 5: // GetObject (Chart)
+                    HandleGetObject(response);
+                    break;
+                case 6: // GetLayout (Chart)
+                    HandleGetChartLayout(response);
+                    break;
+                case 7: // CreateSessionObject (HyperCube)
+                    HandleCreateSessionObjectHyperCube(response);
+                    break;
+                case 8: // GetLayout (HyperCube)
+                    HandleGetHyperCubeLayout(response);
+                    break;
+                case 9: // ExportData
+                    HandleExportData(response);
+                    break;
+            }
+        }
+
+        private static void SendRequest(JObject request)
+        {
+            request["id"] = messageId++;
+            ws.Send(request.ToString());
+        }
+
+        private static void HandleGetDocList(JObject response)
+        {
+            foreach (var doc in response["result"]["qDocList"])
+            {
+                if (doc["qDocName"].ToString() == APP_NAME)
+                {
+                    var appId = doc["qDocId"].ToString();
+                    SendRequest(new JObject
+                    {
+                        ["jsonrpc"] = "2.0",
+                        ["id"] = messageId,
+                        ["handle"] = -1,
+                        ["method"] = "OpenDoc",
+                        ["params"] = new JArray(appId)
+                    });
+                    break;
+                }
+            }
+        }
+
+        private static void HandleOpenDoc(JObject response)
+        {
+            appHandle = response["result"]["qReturn"]["qHandle"].ToObject<int>();
+            SendRequest(new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = messageId,
+                ["handle"] = appHandle,
+                ["method"] = "CreateSessionObject",
+                ["params"] = new JArray(new JObject
+                {
+                    ["qInfo"] = new JObject { ["qType"] = "SheetList" },
+                    ["qAppObjectListDef"] = new JObject
+                    {
+                        ["qType"] = "sheet",
+                        ["qData"] = new JObject { ["cells"] = "/cells" }
+                    }
+                })
+            });
+        }
+
+        private static void HandleCreateSessionObjectSheetList(JObject response)
+        {
+            sessionHandle = response["result"]["qReturn"]["qHandle"].ToObject<int>();
+            SendRequest(new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = messageId,
+                ["handle"] = sessionHandle,
+                ["method"] = "GetLayout",
+                ["params"] = new JArray()
+            });
+        }
+
+        private static void HandleGetSheetLayout(JObject response)
+        {
+            var sheets = response["result"]["qLayout"]["qAppObjectList"]["qItems"];
+            foreach (var sheet in sheets)
+            {
+                foreach (var cell in sheet["qData"]["cells"])
+                {
+                    Console.WriteLine($"Chart ID: {cell["name"]}, Type: {cell["type"]}");
+                }
+            }
+            SendRequest(new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = messageId,
+                ["handle"] = appHandle,
+                ["method"] = "GetObject",
+                ["params"] = new JArray(CHART_ID)
+            });
+        }
+
+        private static void HandleGetObject(JObject response)
+        {
+            chartHandle = response["result"]["qReturn"]["qHandle"].ToObject<int>();
+            SendRequest(new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = messageId,
+                ["handle"] = chartHandle,
+                ["method"] = "GetLayout",
+                ["params"] = new JArray()
+            });
+        }
+
+        private static void HandleGetChartLayout(JObject response)
+        {
+            var hyperCubeDef = response["result"]["qLayout"]["qHyperCubeDef"];
+            var dimensions = hyperCubeDef["qDimensions"];
+            var measures = hyperCubeDef["qMeasures"];
+            var width = dimensions.Count() + measures.Count();
+            SendRequest(new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = messageId,
+                ["handle"] = appHandle,
+                ["method"] = "CreateSessionObject",
+                ["params"] = new JArray(new JObject
+                {
+                    ["qInfo"] = new JObject { ["qType"] = "HyperCube" },
+                    ["qHyperCubeDef"] = new JObject
+                    {
+                        ["qDimensions"] = dimensions,
+                        ["qMeasures"] = measures,
+                        ["qInitialDataFetch"] = new JArray(new JObject
+                        {
+                            ["qTop"] = 0,
+                            ["qLeft"] = 0,
+                            ["qHeight"] = 1000,
+                            ["qWidth"] = width
+                        })
+                    }
+                })
+            });
+        }
+
+        private static void HandleCreateSessionObjectHyperCube(JObject response)
+        {
+            hypercubeHandle = response["result"]["qReturn"]["qHandle"].ToObject<int>();
+            SendRequest(new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = messageId,
+                ["handle"] = hypercubeHandle,
+                ["method"] = "GetLayout",
+                ["params"] = new JArray()
+            });
+        }
+
+        private static void HandleGetHyperCubeLayout(JObject response)
+        {
+            var hyperCube = response["result"]["qLayout"]["qHyperCube"];
+            var dimensions = hyperCube["qDimensionInfo"].Select(d => d["qFallbackTitle"].ToString()).ToList();
+            var measures = hyperCube["qMeasureInfo"].Select(m => m["qFallbackTitle"].ToString() ?? m["qDef"].ToString()).ToList();
+            var data = hyperCube["qDataPages"][0]["qMatrix"];
+
+            // Write to CSV
+            using (var writer = new StreamWriter(OUTPUT_CSV))
+            {
+                // Write header
+                writer.WriteLine(string.Join(",", dimensions.Concat(measures)));
+                // Write data rows
+                foreach (var row in data)
+                {
+                    var rowData = row.Select(cell => cell["qText"].ToString());
+                    writer.WriteLine(string.Join(",", rowData));
+                }
+            }
+            Console.WriteLine($"Chart data saved to {OUTPUT_CSV}");
+
+            // Export data as CSV
+            SendRequest(new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = messageId,
+                ["handle"] = chartHandle,
+                ["method"] = "ExportData",
+                ["params"] = new JArray("CSV_C")
+            });
+        }
+
+        private static async void HandleExportData(JObject response)
+        {
+            var exportUrl = "http://localhost:4848" + response["result"]["qUrl"].ToString();
+            using (var client = new HttpClient())
+            {
+                var responseData = await client.GetAsync(exportUrl);
+                var content = await responseData.Content.ReadAsByteArrayAsync();
+                File.WriteAllBytes("exported_chart_data.csv", content);
+                Console.WriteLine("Exported chart data saved to exported_chart_data.csv");
+            }
+        }
+    }
+}
