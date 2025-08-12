@@ -271,3 +271,198 @@ namespace QlikSenseChartDataExtractor
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+// QlikChartRepository.cs
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Npgsql;
+
+namespace QlikDashboardbackend.Data
+{
+    public class QlikChartRepository
+    {
+        private readonly string _connectionString;
+
+        public QlikChartRepository(string connectionString)
+        {
+            _connectionString = connectionString;
+        }
+
+        public async Task SaveChartDataAsync(string chartId, string qText, double? qNum, string layoutJson)
+        {
+            using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            var cmd = new NpgsqlCommand(
+                @"INSERT INTO QlikChartData (ChartId, QText, QNum, LayoutJson, CreatedAt) 
+                  VALUES (@chartId, @qText, @qNum, @layoutJson, NOW())", conn);
+
+            cmd.Parameters.AddWithValue("chartId", chartId);
+            cmd.Parameters.AddWithValue("qText", (object)qText ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("qNum", (object)qNum ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("layoutJson", layoutJson ?? "");
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        public async Task<IEnumerable<dynamic>> GetLatestChartDataAsync()
+        {
+            using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            var cmd = new NpgsqlCommand(
+                "SELECT ChartId, QText, QNum, LayoutJson, CreatedAt FROM QlikChartData ORDER BY CreatedAt DESC", conn);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+
+            var list = new List<dynamic>();
+            while (await reader.ReadAsync())
+            {
+                list.Add(new
+                {
+                    ChartId = reader["ChartId"].ToString(),
+                    QText = reader["QText"].ToString(),
+                    QNum = reader["QNum"] != DBNull.Value ? Convert.ToDouble(reader["QNum"]) : (double?)null,
+                    LayoutJson = reader["LayoutJson"].ToString(),
+                    CreatedAt = Convert.ToDateTime(reader["CreatedAt"])
+                });
+            }
+            return list;
+        }
+    }
+}
+
+
+
+
+
+
+
+
+// QlikDataExtractor.cs
+using System;
+using System.Text.Json;
+using System.Threading.Tasks;
+using QlikDashboardbackend.Data;
+
+namespace QlikDashboardbackend.Services
+{
+    public class QlikDataExtractor
+    {
+        private readonly QlikChartRepository _qlikChartRepository;
+
+        public QlikDataExtractor(QlikChartRepository qlikChartRepository)
+        {
+            _qlikChartRepository = qlikChartRepository;
+        }
+
+        /// <summary>
+        /// Extracts qText, qNum, and layout JSON from raw Qlik API response and saves to DB.
+        /// </summary>
+        /// <param name="chartId"></param>
+        /// <param name="rawJson"></param>
+        public async Task ExtractAndStoreAsync(string chartId, string rawJson)
+        {
+            if (string.IsNullOrWhiteSpace(rawJson))
+                throw new ArgumentException("rawJson cannot be null or empty");
+
+            using var doc = JsonDocument.Parse(rawJson);
+            var root = doc.RootElement;
+
+            // Extract layout JSON if present, else empty object
+            string layoutJson = root.TryGetProperty("layout", out var layoutElement)
+                ? layoutElement.GetRawText()
+                : "{}";
+
+            // Extract qMatrix data from qHyperCubeData
+            if (!root.TryGetProperty("qHyperCubeData", out var hyperCubeData) ||
+                !hyperCubeData.TryGetProperty("qMatrix", out var qMatrix))
+            {
+                // No hypercube data found, nothing to save
+                return;
+            }
+
+            foreach (var row in qMatrix.EnumerateArray())
+            {
+                foreach (var cell in row.EnumerateArray())
+                {
+                    string qText = cell.TryGetProperty("qText", out var qTextProp)
+                        ? qTextProp.GetString()
+                        : null;
+
+                    double? qNum = null;
+                    if (cell.TryGetProperty("qNum", out var qNumProp) && qNumProp.ValueKind == JsonValueKind.Number)
+                    {
+                        qNum = qNumProp.GetDouble();
+                    }
+
+                    // Save extracted data point to DB
+                    await _qlikChartRepository.SaveChartDataAsync(chartId, qText, qNum, layoutJson);
+                }
+            }
+        }
+    }
+}
+
+
+
+
+
+
+
+using QlikDashboardbackend.Data;
+using QlikDashboardbackend.Services;
+using System.Collections.Generic;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading.Tasks;
+
+namespace QlikDashboardbackend.Services
+{
+    public class QlikProcessor
+    {
+        private readonly QlikChartRepository _repository;
+        private readonly QlikDataExtractor _extractor;
+
+        public QlikProcessor(string connectionString)
+        {
+            _repository = new QlikChartRepository(connectionString);
+            _extractor = new QlikDataExtractor(_repository);
+        }
+
+        public async Task<List<object>> RunAsync()
+        {
+            string appId = "your-app-id";
+            List<string> objectIds = new List<string> { "id1", "id2", "id3" };
+
+            var clientCert = new X509Certificate2("path-to-cert.pfx", "cert-password");
+            var handler = new ClientWebSocketHandler(clientCert, "UserDirectory=INTERNAL; UserId=sa_engine");
+
+            List<object> results = new List<object>();
+
+            using var ws = await handler.ConnectAsync(new Uri($"wss://your-qlik-server:4747/app/{appId}"));
+
+            foreach (var objectId in objectIds)
+            {
+                string rawJson = await QlikCert.SendEngineRequest(ws, appId, objectId);
+
+                // Save parsed data to DB
+                await _extractor.ExtractAndStoreAsync(objectId, rawJson);
+
+                results.Add(rawJson); // or some summary data if needed
+            }
+
+            return results;
+        }
+    }
+}
+
