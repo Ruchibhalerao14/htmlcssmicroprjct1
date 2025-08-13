@@ -520,3 +520,93 @@ namespace QlikDashboardbackend.Controllers
 }
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+using Microsoft.AspNetCore.Mvc;
+using System;
+using System.Threading.Tasks;
+using QlikDashboardbackend.Services;
+using QlikDashboardbackend.Data;
+
+namespace QlikDashboardbackend.Controllers
+{
+    [ApiController]
+    [Route("api/[controller]")]
+    public class QlikController : ControllerBase
+    {
+        private readonly string _connectionString = "Host=localhost;Database=your_db;Username=your_user;Password=your_pass";
+
+        /// <summary>
+        /// POST - Extracts Qlik chart data and stores it in DB
+        /// </summary>
+        [HttpPost("process")]
+        public async Task<IActionResult> ProcessQlikData()
+        {
+            try
+            {
+                var processor = new QlikProcessor(_connectionString);
+                var results = await processor.RunAsync();
+
+                return Ok(new
+                {
+                    Success = true,
+                    Message = "Qlik data processed and saved to DB.",
+                    Results = results
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
+        /// GET - Returns latest chart data from DB
+        /// </summary>
+        [HttpGet("latest")]
+        public async Task<IActionResult> GetLatestChartData()
+        {
+            try
+            {
+                var repository = new QlikChartRepository(_connectionString);
+                var latestData = await repository.GetLatestChartDataAsync();
+
+                return Ok(new
+                {
+                    Success = true,
+                    Data = latestData
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+    }
+}
+
+
+
