@@ -464,5 +464,59 @@ namespace QlikDashboardbackend.Services
             return results;
         }
     }
+
+
 }
+
+
+
+
+
+
+
+
+
+
+
+
+using Microsoft.AspNetCore.Mvc;
+using System;
+using System.Threading.Tasks;
+using QlikDashboardbackend.Services;
+
+namespace QlikDashboardbackend.Controllers
+{
+    [ApiController]
+    [Route("api/[controller]")]
+    public class QlikController : ControllerBase
+    {
+        private readonly string _connectionString = "Host=localhost;Database=your_db;Username=your_user;Password=your_pass";
+
+        [HttpPost("process")]
+        public async Task<IActionResult> ProcessQlikData()
+        {
+            try
+            {
+                var processor = new QlikProcessor(_connectionString);
+                var results = await processor.RunAsync();
+
+                return Ok(new
+                {
+                    Success = true,
+                    Message = "Qlik data processed and saved to DB.",
+                    Results = results
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    Success = false,
+                    Error = ex.Message
+                });
+            }
+        }
+    }
+}
+
 
