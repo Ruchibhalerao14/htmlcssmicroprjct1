@@ -697,3 +697,68 @@ namespace QlikDashboardbackend.Controllers
 
 
 
+
+
+
+
+
+using System.Net.Http;
+using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
+using System.Collections.Generic;
+
+namespace QlikDashboardbackend.Helpers
+{
+    public class QlikHyperCubeHelper
+    {
+        private readonly HttpClient _httpClient;
+
+        public QlikHyperCubeHelper(HttpClient httpClient)
+        {
+            _httpClient = httpClient;
+        }
+
+        // Model for clean output
+        public class HyperCubeData
+        {
+            public string QText { get; set; }
+            public double? QNum { get; set; }
+        }
+
+        // Fetch & process data from Swagger process endpoint
+        public async Task<List<HyperCubeData>> GetProcessedDataAsync(string processUrl)
+        {
+            var response = await _httpClient.GetStringAsync(processUrl);
+
+            var json = JObject.Parse(response);
+
+            var dataMatrix = json["qHyperCube"]?["qDataPages"]?[0]?["qMatrix"];
+            var result = new List<HyperCubeData>();
+
+            if (dataMatrix != null)
+            {
+                foreach (var row in dataMatrix)
+                {
+                    string qText = row[0]?["qText"]?.ToString();
+                    double? qNum = row[0]?["qNum"]?.ToObject<double?>();
+
+                    result.Add(new HyperCubeData { QText = qText, QNum = qNum });
+                }
+            }
+
+            // log in console for testing
+            Console.WriteLine("=== Extracted HyperCube Data ===");
+            foreach (var item in result)
+            {
+                Console.WriteLine($"qText: {item.QText}, qNum: {item.QNum}");
+            }
+
+            return result;
+        }
+    }
+}
+
+
+
+
+
