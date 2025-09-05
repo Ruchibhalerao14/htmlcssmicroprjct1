@@ -755,8 +755,302 @@ namespace QlikDashboardbackend.Helpers
 
             return result;
         }
+
+
+
+
+
     }
 }
+
+
+
+
+
+
+
+
+terraform.tf 
+
+
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "google" {
+  project = var.project_id
+  region  = var.region
+  zone    = var.zone
+}
+
+
+
+
+auto
+
+
+project_id              = "hsbc-8887838-mssbi-dev"
+region                  = "europe-west2"
+zone                    = "europe-west2-b"
+instance_name           = "looker-training-db"
+db_version              = "MYSQL_8_0"
+tier                    = "db-custom-2-7680"
+disk_size               = 100
+disk_autoresize         = true
+availability_type       = "ZONAL"
+network                 = "hsbc-default-network"
+backup_location         = "europe-west2"
+psc_projects            = ["hsbc-8887838-mssbi-dev"]
+kms_key_name            = "projects/hsbc-6320774-kms-dev/locations/europe-west2/keyRings/sql/cryptoKeys/sqlsharedkey"
+labels = {
+  purpose = "looker_training"
+}
+
+
+
+
+variables.tf 
+
+
+variable "project_id" {
+  type        = string
+  description = "GCP project ID"
+}
+
+variable "region" {
+  type        = string
+  description = "GCP region"
+}
+
+variable "zone" {
+  type        = string
+  description = "GCP zone"
+}
+
+variable "instance_name" {
+  type        = string
+  description = "Cloud SQL instance name"
+}
+
+variable "db_version" {
+  type        = string
+  description = "Database version"
+  default     = "MYSQL_8_0"
+}
+
+variable "tier" {
+  type        = string
+  description = "Machine type tier (e.g., db-custom-2-7680)"
+}
+
+variable "disk_size" {
+  type        = number
+  default     = 100
+}
+
+variable "disk_autoresize" {
+  type        = bool
+  default     = true
+}
+
+variable "availability_type" {
+  type        = string
+  default     = "ZONAL"
+}
+
+variable "network" {
+  type        = string
+  description = "VPC network name"
+}
+
+variable "backup_location" {
+  type        = string
+}
+
+variable "psc_projects" {
+  type        = list(string)
+  description = "Allowed PSC projects"
+}
+
+variable "kms_key_name" {
+  type        = string
+  description = "CMEK key for encryption"
+}
+
+variable "labels" {
+  type        = map(string)
+  default     = {}
+}
+
+
+
+
+main.tf 
+
+module "cloudsql" {
+  source = "./modules/cloudsql"
+
+  project_id        = var.project_id
+  region            = var.region
+  zone              = var.zone
+  instance_name     = var.instance_name
+  db_version        = var.db_version
+  tier              = var.tier
+  disk_size         = var.disk_size
+  disk_autoresize   = var.disk_autoresize
+  availability_type = var.availability_type
+  network           = var.network
+  backup_location   = var.backup_location
+  psc_projects      = var.psc_projects
+  kms_key_name      = var.kms_key_name
+  labels            = var.labels
+}
+
+
+
+
+modulemain 
+
+
+resource "google_sql_database_instance" "default" {
+  name             = var.instance_name
+  project          = var.project_id
+  region           = var.region
+  database_version = var.db_version
+
+  settings {
+    tier              = var.tier
+    availability_type = var.availability_type
+    disk_size         = var.disk_size
+    disk_autoresize   = var.disk_autoresize
+
+    ip_configuration {
+      ipv4_enabled      = false
+      private_network   = "projects/${var.project_id}/global/networks/${var.network}"
+      psc_config {
+        allowed_consumer_projects = var.psc_projects
+      }
+    }
+
+    backup_configuration {
+      enabled            = true
+      location           = var.backup_location
+      point_in_time_recovery_enabled = true
+    }
+
+    database_flags {
+      name  = "cloudsql_iam_authentication"
+      value = "on"
+    }
+    database_flags {
+      name  = "general_log"
+      value = "on"
+    }
+    database_flags {
+      name  = "log_output"
+      value = "TABLE"
+    }
+  }
+
+  deletion_protection = false
+
+  encryption_key_name = var.kms_key_name
+
+  labels = var.labels
+}
+
+
+
+
+
+varibles 
+
+
+variable "project_id" {
+  type        = string
+  description = "GCP project ID"
+}
+
+variable "region" {
+  type        = string
+  description = "GCP region"
+}
+
+variable "zone" {
+  type        = string
+  description = "GCP zone"
+}
+
+variable "instance_name" {
+  type        = string
+  description = "Cloud SQL instance name"
+}
+
+variable "db_version" {
+  type        = string
+  description = "Database version (MYSQL_8_0, POSTGRES_14, etc.)"
+  default     = "MYSQL_8_0"
+}
+
+variable "tier" {
+  type        = string
+  description = "Machine type tier (e.g., db-custom-2-7680 for 2 vCPU, 7680MB RAM)"
+}
+
+variable "disk_size" {
+  type        = number
+  default     = 100
+  description = "Disk size in GB"
+}
+
+variable "disk_autoresize" {
+  type        = bool
+  default     = true
+  description = "Whether to enable disk auto-resize"
+}
+
+variable "availability_type" {
+  type        = string
+  default     = "ZONAL"
+  description = "Availability type: ZONAL or REGIONAL"
+}
+
+variable "network" {
+  type        = string
+  description = "VPC network name"
+}
+
+variable "backup_location" {
+  type        = string
+  description = "Location for backups (must be a valid GCP region)"
+}
+
+variable "psc_projects" {
+  type        = list(string)
+  description = "List of allowed PSC consumer projects"
+}
+
+variable "kms_key_name" {
+  type        = string
+  description = "CMEK key resource ID for encryption"
+}
+
+variable "labels" {
+  type        = map(string)
+  default     = {}
+  description = "Labels to assign to the instance"
+}
+
+
+
+
 
 
 
